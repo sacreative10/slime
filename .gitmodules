@@ -1,0 +1,6 @@
+[submodule "vendors/Cashew"]
+	path = vendors/Cashew
+	url = https://github.com/sacreative10/Cashew
+[submodule "vendors/--depth=1"]
+	path = vendors/--depth=1
+	url = https://github.com/sacreative10/Cashew
