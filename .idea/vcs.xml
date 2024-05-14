@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="VcsDirectoryMappings">
+    <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/vendors/Cashew" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/vendors/Cashew/external/glfw" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/vendors/Cashew/external/glm" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/vendors/Cashew/external/imgui" vcs="Git" />
+  </component>
+</project>
