@@ -8,6 +8,43 @@
 #include <CashewLib/Input/KeyCodes.h>
 
 #include "imgui_internal.h"
+#include <glm/gtc/constants.hpp>
+
+// helpers
+
+uint32_t vec4tobyte(const glm::vec4 &v) {
+  uint32_t r = (uint32_t) (v.r * 255.0f);
+  uint32_t g = (uint32_t) (v.g * 255.0f);
+  uint32_t b = (uint32_t) (v.b * 255.0f);
+  uint32_t a = (uint32_t) (v.a * 255.0f);
+  return (a << 24) | (b << 16) | (g << 8) | r;
+}
+
+glm::vec4 bytetovec4(uint32_t v) {
+  float a = (float) (v & 0xff) / 255.0f;
+  float r = (float) ((v >> 24) & 0xff) / 255.0f;
+  float g = (float) ((v >> 16) & 0xff) / 255.0f;
+  float b = (float) ((v >> 8) & 0xff) / 255.0f;
+
+
+  return glm::vec4(r, g, b, a);
+}
+
+void testcolourconversion() {
+  // test 1
+  glm::vec4 v = glm::vec4(1.f, 0.f, 0.f, 1.f);
+  uint32_t c = vec4tobyte(v);
+  std::cout << "Test 1: " << std::hex << c << std::endl;
+
+  uint32_t c2 = 0x00ff00ff;
+  glm::vec4 v2 = bytetovec4(c2);
+  std::cout << "Test 2: " << v2.r << " " << v2.g << " " << v2.b << " " << v2.a << std::endl;
+
+  glm::vec4 v3 = glm::vec4(0.5f, 0.25f, 0.7f, 1.f);
+  uint32_t c3 = vec4tobyte(v3);
+  glm::vec4 v4 = bytetovec4(c3);
+  std::cout << "Test 3: " << v4.r << " " << v4.g << " " << v4.b << " " << v4.a << std::endl;
+}
 
 
 class imageCreatorEntity {
@@ -16,13 +53,14 @@ public:
     m_Data = new uint32_t[width * height];
     time = 0.0f;
   }
+
   ~imageCreatorEntity() {
     delete[] m_Data;
   }
 
   virtual void requestImage() = 0;
-  virtual void computeImage() = 0;
 
+  virtual void computeImage() = 0;
 
 public:
   uint32_t *m_Data = nullptr;
@@ -41,119 +79,112 @@ public:
   void requestImage() override {
     computeImage();
   }
+
   void computeImage() override {
     time += 0.01f;
     for (int i = 0; i < m_imageWidth * m_imageHeight; i++) {
-      m_Data[i] = 0xff0000ff;
+      m_Data[i] = 0x00ffffff;
     }
   }
 };
 
 
-class pathtracer : public imageCreatorEntity {
+class donut : public imageCreatorEntity {
 public:
-  pathtracer(uint32_t width, uint32_t height) : imageCreatorEntity(width, height) {
+  donut(uint32_t width, uint32_t height) : imageCreatorEntity(width, height) {
+    K1 = m_imageWidth * K2 * 3 / (8 * (R1 + R2));
     time = 0.0f;
   }
 
-public:
   void requestImage() override {
     computeImage();
   }
-  struct Ray {
-    glm::vec3 origin;
-    glm::vec3 direction;
-  };
-
-  Ray generateCameraRay(float x, float y) {
-    Ray ray;
-
-    float focalLength = 1.0f;
-    float viewportHeight = 2.0f;
-    float viewportWidth = viewportHeight * (float(m_imageWidth) / float(m_imageHeight));
-    glm::vec3 cameraCenter = glm::vec3(0.0f, 0.0f, 0.0f);
-
-    glm::vec3 viewport_u = glm::vec3(viewportWidth, 0.0f, 0.0f);
-    glm::vec3 viewport_v = glm::vec3(0.0f, -viewportHeight, 0.0f);
-
-    glm::vec3 pixelDeltax = viewport_u / (float)m_imageWidth;
-    glm::vec3 pixelDeltay = viewport_v / (float)m_imageHeight;
-
-    glm::vec3 viewport_upper_left = cameraCenter - glm::vec3(0, 0, focalLength) - (viewport_u/2.0f) - (viewport_v/2.0f);
-
-    glm::vec3 pixel00_loc = viewport_upper_left + 0.5f * (pixelDeltax + pixelDeltay);
-
-    glm::vec3 pixel_loc = pixel00_loc + (y * pixelDeltax) + (x * pixelDeltay);
-
-    glm::vec3 ray_direction = pixel_loc - cameraCenter;
-
-    ray.origin = cameraCenter;
-    ray.direction = ray_direction;
-
-    return ray;
-  }
-
-  bool Scene(Ray& ray) {
-    // interesection with sphere
-    glm::vec3 sphere_center = glm::vec3(0.0f, 0.0f, -1.0f);
-    float radius = 0.5f;
-
-
-    glm::vec3 oc = sphere_center - ray.origin;
-    float a = glm::dot(ray.direction, ray.direction);
-    float b = -2.0f * glm::dot(ray.direction, oc);
-    float c = glm::dot(oc, oc) - radius * radius;
-    float discriminant = b * b - 4 * a * c;
-    return (discriminant >= 0);
-  }
-
-  uint32_t color(glm::vec3 col) {
-    uint32_t colour = 0xff000000;
-    colour += (uint32_t)(col.x * 255.99f);
-    colour += (uint32_t)(col.y * 255.99f) << 8;
-    colour += (uint32_t)(col.z * 255.99f) << 16;
-
-    return colour;
-
-  }
-
 
   void computeImage() override {
-    // do stuff here
-    for (int i = 0; i < m_imageHeight; i++) {
-      for (int j = 0; j < m_imageWidth; j++) {
-        Ray ray = generateCameraRay(i, j);
+    // interpolate A and B as a function of time
 
-        if (Scene(ray)) {
-          m_Data[i * m_imageWidth + j] = 0xff0000ff;
+    float *zbuffer = new float[m_imageWidth * m_imageHeight];
+
+    m_Data = new uint32_t[m_imageWidth * m_imageHeight];
+
+    float phi_spacing = 0.05f;
+    float theta_spacing = 0.02f;
+
+    for (float phi = 0; phi < glm::two_pi<float>(); phi += phi_spacing) {
+      for (float theta = 0; theta < glm::two_pi<float>(); theta += theta_spacing) {
+        glm::mat3 rot = glm::mat3(
+                          glm::vec3(cos(phi), 0, sin(phi)),
+                          glm::vec3(0, 1, 0), // y-axis
+                          glm::vec3(-sin(phi), 0, cos(phi))
+                        ) * glm::mat3(
+                          glm::vec3(1, 0, 0),
+                          glm::vec3(0, cos(A), sin(A)), // x-axis
+                          glm::vec3(0, -sin(A), cos(A))
+                        ) * glm::mat3(
+                          glm::vec3(cos(B), sin(B), 0),
+                          glm::vec3(-sin(B), cos(B), 0), // z-axis
+                          glm::vec3(0, 0, 1)
+                        );
+
+        // technically we don't need to store the position, but it useful for debugging
+        pos = glm::vec3(R2 + (R1 * cos(theta)), R1 * sin(theta), 0.0f) * rot;
+        float ooz = 1.f / (pos.z + K2);
+
+        // projecting x, y, to 2D
+        int x = (m_imageWidth / 2) + K1 * ooz * pos.x;
+        int y = (m_imageHeight / 2) - K1 * ooz * pos.y;
+
+        // a simple check to see if the point is within the image, because we aren't guaranteed that the
+        // donut will be within the image
+        if (x < 0 || x >= m_imageWidth || y < 0 || y >= m_imageHeight) {
           continue;
         }
 
-        glm::vec3 unit_direction = glm::normalize(ray.direction);
-        float a = 0.5f * (unit_direction.y + 1.0f);
-        glm::vec3 col = (1.0f - a) * glm::vec3(1.0f, 1.0f, 1.0f) + a * glm::vec3(0.5f, 0.7f, 1.0f);
+        // luminance is the dot product of the rotated normal and the direction of light, which defined as (0, 1, -1)
+        // which is behind and above the camera
+        float luminance = glm::dot((rot * glm::vec3(cos(theta), sin(theta), 0)), glm::normalize(glm::vec3(0, 1, -1)));
 
-        m_Data[i * m_imageWidth + j] = color(col);
-
+        int index = y * m_imageWidth + x;
+        // check if the pixel is worth shading, and see if we are behind anything
+        if (luminance > 0 && ooz > zbuffer[index]) {
+          zbuffer[index] = ooz;
+          //          write the pixel
+          m_Data[index] = vec4tobyte(glm::vec4(1.0f, 1.0f, 1.0f, luminance));
+        }
       }
     }
 
+    A = glm::two_pi<float>() * time * 0.3;
+    B = glm::two_pi<float>() * time * 0.1;
   }
+
+private:
+  const float R1 = 1.0f; // radius of the donut
+  const float R2 = 2.0f; // radius of the donut hole
+  float K1;
+  const float K2 = 5.0f; // constant scaling factor for the y-axis;
+
+
+  glm::vec3 pos = glm::vec3(0.0f, 0.0f, 0.0f);
+  float A = 0.0f;
+  float B = 0.0f;
 };
 
 
 class WindowLayer : public Cashew::Layer {
 public:
   WindowLayer() : Layer() {
-    m_basic = new pathtracer(1040, 720);
-    m_Image = std::make_shared<Cashew::Image>("../cat.jpeg");
+    m_basic = new donut(1040, 720);
+    m_Image = std::make_shared<Cashew::Image>(1040, 720, Cashew::ImageFormat::RGBA);
   }
+
   virtual void onUIRender() override {
     ImGui::Begin("Observation Window");
     ImGui::SetWindowSize(ImVec2(1040, 720));
     m_basic->requestImage();
-    m_Image->setData(m_basic->m_Data);
-    ImGui::Image((void *)m_Image->getDescriptorSet(), ImVec2(1040, 720));
+    m_Data = m_basic->m_Data;
+    m_Image->setData(m_Data);
+    ImGui::Image((void *) m_Image->getDescriptorSet(), ImVec2(1040, 720));
     ImGui::End();
     // panel
     if (m_shouldPanelSeen) {
@@ -165,8 +196,12 @@ public:
       ImGui::End();
     }
   }
-  // add input handling
+
   virtual void onUpdate(float dt) override {
+    m_basic->time += dt;
+
+
+    // input handling
     if (Cashew::Input::isKeyDown(Cashew::KeyCode::Escape)) {
       Cashew::Application::Get().Close();
     } else if (Cashew::Input::isKeyPressed(Cashew::KeyCode::Tab)) {
@@ -178,9 +213,11 @@ public:
       }
     }
   }
+
 private:
   std::shared_ptr<Cashew::Image> m_Image;
-  pathtracer *m_basic;
+  uint32_t *m_Data = nullptr;
+  imageCreatorEntity *m_basic;
 
   bool m_shouldPanelSeen = true;
 };
