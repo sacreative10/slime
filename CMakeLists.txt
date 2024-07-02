@@ -1,4 +1,6 @@
+cmake_minimum_required(VERSION 2.1.3)
 project(PhysarumSimulation)
+
 
 set(CMAKE_CXX_STANDARD 17)
 

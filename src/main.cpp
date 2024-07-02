@@ -1,4 +1,5 @@
 #include <CashewLib/Application.h>
+#include <tuple>
 #include <CashewLib/EntryPoint.h>
 
 #include <CashewLib/Image.h>
@@ -142,13 +143,14 @@ public:
 
         // luminance is the dot product of the rotated normal and the direction of light, which defined as (0, 1, -1)
         // which is behind and above the camera
-        float luminance = glm::dot((rot * glm::vec3(cos(theta), sin(theta), 0)), glm::normalize(glm::vec3(0, 1, -1)));
+        float luminance = glm::dot((rot * glm::vec3(cos(theta), sin(theta), 0)),
+                                   glm::normalize(glm::vec3(0, 1, -1)));
 
         int index = y * m_imageWidth + x;
         // check if the pixel is worth shading, and see if we are behind anything
         if (luminance > 0 && ooz > zbuffer[index]) {
           zbuffer[index] = ooz;
-          //          write the pixel
+          // write the pixel
           m_Data[index] = vec4tobyte(glm::vec4(1.0f, 1.0f, 1.0f, luminance));
         }
       }
@@ -170,11 +172,206 @@ private:
   float B = 0.0f;
 };
 
+class Agent {
+public:
+  void sensoryStage(std::tuple<float, float, float> sensoryInfo, float stepSize, float rotationAngle);
+
+  void move(float stepSize, glm::vec2 bounds) {
+    float newPosx = position.x + stepSize * cos(glm::radians(direction));
+    float newPosy = position.y + stepSize * sin(glm::radians(direction));
+
+    // if (newPosx <= 0 || newPosx >= bounds.x) {
+    //   // we flip the direction if we hit the bounds
+    //   if (direction <= 90) {
+    //     direction = 180 - direction;
+    //   } else if (direction <= 180) {
+    //     direction = 180 + (180 - direction);
+    //   } else if (direction <= 270) {
+    //     direction = 360 - direction;
+    //   } else {
+    //     direction = 360 - (360 - direction);
+    //   }
+    // }
+    // if (newPosy <= 0 || newPosy >= bounds.y) {
+    //   // bruteforce method to flip the direction
+    //   if (direction <= 90) {
+    //     direction = 270 + (90 - direction);
+    //   } else if (direction <= 180) {
+    //     direction = 270 - (180 - direction);
+    //   } else if (direction <= 270) {
+    //     direction = 90 + (270 - direction);
+    //   } else {
+    //     direction = 90 - (360 - direction);
+    //   }
+    // }
+
+    // wrap around
+    if (newPosx < 0) {
+      newPosx = bounds.x - 1;
+    } else if (newPosx >= bounds.x) {
+      newPosx = 0;
+    }
+    if (newPosy < 0) {
+      newPosy = bounds.y - 1;
+    } else if (newPosy >= bounds.y) {
+      newPosy = 0;
+    }
+
+    position = glm::vec2(newPosx, newPosy);
+  }
+
+public:
+  glm::vec2 position;
+
+  float direction; // in radians
+};
+
+
+class slime : public imageCreatorEntity {
+public:
+  slime(int width, int height): imageCreatorEntity(width, height) {
+    time = 0.0f;
+    trailMap = std::vector<float>(width * height, 0.0f);
+    agents = std::vector<Agent>(100);
+    for (Agent &agent: agents) {
+      agent.position = glm::vec2(width / 2, height / 2);
+      agent.direction = (rand() % 360);
+    }
+  }
+
+  void requestImage() override {
+    computeImage();
+  }
+
+  void computeImage() override;
+
+  std::tuple<float, float, float> getSensor(glm::vec2 pos, float direction);
+
+
+  float sensoryAngle = 22.5f;
+  float rotationAngle = 45.0f;
+  float sensoryOffsetDistance = 9.0f;
+  float depositionRate = 1.f;
+  float decayRate = 0.1f;
+
+private:
+  std::vector<float> trailMap;
+  std::vector<Agent> agents;
+};
+
+void slime::computeImage() {
+  m_Data = new uint32_t[m_imageWidth * m_imageHeight];
+
+  // sensory phase
+  for (Agent agent: agents) {
+    auto sensorInfo = getSensor(agent.position, agent.direction);
+    agent.sensoryStage(sensorInfo, 9.0f, rotationAngle);
+  }
+
+  // movement phase
+
+  for (Agent &agent: agents) {
+    agent.move(1.0f, glm::vec2(m_imageWidth - 1, m_imageHeight - 1));
+    trailMap[(int) agent.position.y * m_imageWidth + (int) agent.position.x] += depositionRate;
+  }
+  //
+  // diffusion phase
+  // we start from one to avoid edge handling
+  for (int y = 1; y < m_imageHeight - 1; y++) {
+    for (int x = 1; x < m_imageWidth - 1; x++) {
+      float sum = 0;
+      for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+          sum += trailMap[(y + dy) * m_imageWidth + (x + dx)];
+        }
+      }
+      trailMap[y * m_imageWidth + x] = sum / 9;
+    }
+  }
+
+  // decay phase
+  for (int i = 0; i < m_imageWidth * m_imageHeight; i++) {
+    trailMap[i] *= 1; // rather aggressive decay
+  }
+
+  // convert trail map to image
+  for (int i = 0; i < m_imageWidth * m_imageHeight; i++) {
+    m_Data[i] = vec4tobyte(glm::vec4(1.0f, 1.0f, 1.0f, std::min(1.f, trailMap[i])));
+  }
+}
+
+
+std::tuple<float, float, float> slime::getSensor(glm::vec2 pos, float direction) {
+  float leftAngle = direction - sensoryAngle;
+  float rightAngle = direction + sensoryAngle;
+
+  int leftDY = (int)
+      (sensoryOffsetDistance * sin(glm::radians(leftAngle)));
+  int leftDX = (int) (sensoryOffsetDistance * cos(glm::radians(leftAngle)));
+
+  int rightDY = (int) (sensoryOffsetDistance * sin(glm::radians(rightAngle)));
+  int rightDX = (int) (sensoryOffsetDistance * cos(glm::radians(rightAngle)));
+
+  int centerDY = (int) (sensoryOffsetDistance * sin(glm::radians(direction)));
+  int centerDX = (int) (sensoryOffsetDistance * cos(glm::radians(direction)));
+
+  // TODO: talk about
+  if (pos.x + leftDX < 0 || pos.x + leftDX >= m_imageWidth || pos.y + leftDY < 0 || pos.y + leftDY >= m_imageHeight) {
+    leftDX = 0;
+    leftDY = 0;
+  }
+  if (pos.x + rightDX < 0 || pos.x + rightDX >= m_imageWidth || pos.y + rightDY < 0 || pos.y + rightDY >=
+      m_imageHeight) {
+    rightDX = 0;
+    rightDY = 0;
+  }
+  if (pos.x + centerDX < 0 || pos.x + centerDX >= m_imageWidth || pos.y + centerDY < 0 || pos.y + centerDY >=
+      m_imageHeight) {
+    centerDX = 0;
+    centerDY = 0;
+  }
+
+  float leftSensor = trailMap[(int) (pos.y + leftDY) * m_imageWidth + (int) (pos.x + leftDX)];
+  float rightSensor = trailMap[(int) (pos.y + rightDY) * m_imageWidth + (int) (pos.x + rightDX)];
+  float centerSensor = trailMap[(int) (pos.y + centerDY) * m_imageWidth + (int) (pos.x + centerDX)];
+
+  return std::make_tuple(leftSensor, centerSensor, rightSensor);
+}
+
+
+void Agent::sensoryStage(std::tuple<float, float, float> sensorInfo, float stepSize, float rotationAngle) {
+  // from the trail map, we get the sensor information
+  float leftSensor = std::get<0>(sensorInfo);
+  float centerSensor = std::get<1>(sensorInfo);
+  float rightSensor = std::get<2>(sensorInfo);
+
+  if (centerSensor > leftSensor &&
+      centerSensor > rightSensor) {
+    // we stay on the same path
+    direction += 0.f;
+  } else if (leftSensor < centerSensor && rightSensor < centerSensor) {
+    // we are at a crossroads, where either path is suitable but not the center
+    // we choose a random direction
+    if (rand() % 2 == 0) {
+      direction += rotationAngle;
+    } else {
+      direction -= rotationAngle;
+    }
+  } else if (leftSensor < rightSensor) {
+    // rotate right
+    direction += rotationAngle;
+  } else if (rightSensor < leftSensor) {
+    // rotate left
+    direction -= rotationAngle;
+  } else
+    direction += 0.f;
+}
+
 
 class WindowLayer : public Cashew::Layer {
 public:
   WindowLayer() : Layer() {
-    m_basic = new donut(1040, 720);
+    m_basic = new slime(1040, 720);
     m_Image = std::make_shared<Cashew::Image>(1040, 720, Cashew::ImageFormat::RGBA);
   }
 
@@ -226,7 +423,7 @@ Cashew::Application *Cashew::CreateApplication(int argc, char **argv) {
   Cashew::ApplicationSpecification spec;
   spec.Name = "Physarum";
   spec.Width = 1040;
-  spec.Height = 720;
+  spec.Height = 760;
 
   Cashew::Application *app = new Cashew::Application(spec);
   app->PushLayer<WindowLayer>();
