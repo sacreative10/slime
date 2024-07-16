@@ -10,6 +10,7 @@
 
 #include "imgui_internal.h"
 #include <glm/gtc/constants.hpp>
+#include <glm/gtc/random.hpp>
 
 // helpers
 
@@ -172,53 +173,42 @@ private:
   float B = 0.0f;
 };
 
+
+// subtraction will just be one of input's sign change
+// otherwise adds two functions respecting the [0, 2pi] range
+float angleAddition(float a, float b) {
+  float result = a + b;
+  if (result > glm::two_pi<float>()) {
+    result -= glm::two_pi<float>();
+  }
+  if (result < 0) {
+    result += glm::two_pi<float>();
+  }
+  return result;
+}
+
+int posWrap(int pos, int max) {
+  if (pos < 0) {
+    return max - 1;
+  }
+  if (pos > max) {
+    return 0;
+  }
+  return pos;
+}
+
+void posWrap(glm::vec2 &pos, int width, int height) {
+  // change the input position vector as well
+  pos.x = posWrap((int) pos.x, width);
+  pos.y = posWrap((int) pos.y, height);
+}
+
+
 class Agent {
 public:
   void sensoryStage(std::tuple<float, float, float> sensoryInfo, float stepSize, float rotationAngle);
 
-  void move(float stepSize, glm::vec2 bounds) {
-    float newPosx = position.x + stepSize * cos(glm::radians(direction));
-    float newPosy = position.y + stepSize * sin(glm::radians(direction));
-
-    // if (newPosx <= 0 || newPosx >= bounds.x) {
-    //   // we flip the direction if we hit the bounds
-    //   if (direction <= 90) {
-    //     direction = 180 - direction;
-    //   } else if (direction <= 180) {
-    //     direction = 180 + (180 - direction);
-    //   } else if (direction <= 270) {
-    //     direction = 360 - direction;
-    //   } else {
-    //     direction = 360 - (360 - direction);
-    //   }
-    // }
-    // if (newPosy <= 0 || newPosy >= bounds.y) {
-    //   // bruteforce method to flip the direction
-    //   if (direction <= 90) {
-    //     direction = 270 + (90 - direction);
-    //   } else if (direction <= 180) {
-    //     direction = 270 - (180 - direction);
-    //   } else if (direction <= 270) {
-    //     direction = 90 + (270 - direction);
-    //   } else {
-    //     direction = 90 - (360 - direction);
-    //   }
-    // }
-
-    // wrap around
-    if (newPosx < 0) {
-      newPosx = bounds.x - 1;
-    } else if (newPosx >= bounds.x) {
-      newPosx = 0;
-    }
-    if (newPosy < 0) {
-      newPosy = bounds.y - 1;
-    } else if (newPosy >= bounds.y) {
-      newPosy = 0;
-    }
-
-    position = glm::vec2(newPosx, newPosy);
-  }
+  void motorPhase(int imageWidth, int imageHeight, float stepSize);
 
 public:
   glm::vec2 position;
@@ -226,16 +216,75 @@ public:
   float direction; // in radians
 };
 
+void Agent::sensoryStage(std::tuple<float, float, float> sensoryInfo, float stepSize, float rotationAngle) {
+  float leftSensorValue = std::get<1>(sensoryInfo);
+  float rightSensorValue = std::get<0>(sensoryInfo);
+  float frontSensorValue = std::get<2>(sensoryInfo);
+
+  if (frontSensorValue > leftSensorValue && frontSensorValue > rightSensorValue) {
+    direction = angleAddition(direction, 0);
+  } else if (frontSensorValue < leftSensorValue && frontSensorValue < rightSensorValue) {
+    if (rand() % 2 == 0) {
+      direction = angleAddition(direction, rotationAngle);
+    } else {
+      direction = angleAddition(direction, -rotationAngle);
+    }
+  } else if (leftSensorValue < rightSensorValue) {
+    direction = angleAddition(direction, rotationAngle);
+  } else if (leftSensorValue > rightSensorValue) {
+    direction = angleAddition(direction, -rotationAngle);
+  }
+}
+
+void Agent::motorPhase(int imageWidth, int imageHeight, float stepSize) {
+  glm::vec2 newPosition = position + (stepSize * glm::vec2(cos(direction), sin(direction)));
+  posWrap(newPosition, imageWidth, imageHeight);
+  position = newPosition;
+}
+
+// diffusion algorithm, takes in a 2D array and applies the diffusion algorithm
+void diffusion(std::vector<std::vector<float> > &array, int width, int height, float decayRate) {
+  std::vector<std::vector<float> > newArray = std::vector<std::vector<float> >(
+    height + 1, std::vector<float>(width + 1, 0.0f));
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      float value = array[y][x];
+      float newValue = value * (1 - decayRate);
+      float diffusion = value * decayRate / 8.0f;
+
+      // apply diffusion
+      if (y > 0) {
+        newArray[y][x] += diffusion;
+      }
+      if (x < width - 1) {
+        newArray[y + 1][x] += diffusion;
+      }
+      if (x > 0) {
+        newArray[y][x - 1] += diffusion;
+      }
+      if (y < height - 2) {
+        newArray[y][x + 1] += diffusion;
+      }
+
+      newArray[y][x] += newValue;
+    }
+  }
+
+  array = newArray;
+}
+
 
 class slime : public imageCreatorEntity {
 public:
   slime(int width, int height): imageCreatorEntity(width, height) {
     time = 0.0f;
-    trailMap = std::vector<float>(width * height, 0.0f);
-    agents = std::vector<Agent>(100);
+    trailMap = std::vector<std::vector<float> >(height + 1, std::vector<float>(width + 1));
+    agents = std::vector<Agent>(1000);
     for (Agent &agent: agents) {
-      agent.position = glm::vec2(width / 2, height / 2);
-      agent.direction = (rand() % 360);
+      int randPosx = rand() % width;
+      int randPosy = rand() % height;
+      agent.position = glm::vec2(randPosx, randPosy);
+      agent.direction = glm::linearRand(0.0f, glm::two_pi<float>());
     }
   }
 
@@ -248,14 +297,15 @@ public:
   std::tuple<float, float, float> getSensor(glm::vec2 pos, float direction);
 
 
-  float sensoryAngle = 22.5f;
-  float rotationAngle = 45.0f;
+  float sensoryAngle = glm::radians(45.f);
+  float rotationAngle = glm::radians(45.0f);
   float sensoryOffsetDistance = 9.0f;
-  float depositionRate = 1.f;
+  float stepSize = 1.f;
+  float depositionRate = 5.f;
   float decayRate = 0.1f;
 
 private:
-  std::vector<float> trailMap;
+  std::vector<std::vector<float> > trailMap;
   std::vector<Agent> agents;
 };
 
@@ -263,108 +313,50 @@ void slime::computeImage() {
   m_Data = new uint32_t[m_imageWidth * m_imageHeight];
 
   // sensory phase
-  for (Agent agent: agents) {
-    auto sensorInfo = getSensor(agent.position, agent.direction);
-    agent.sensoryStage(sensorInfo, 9.0f, rotationAngle);
-  }
 
-  // movement phase
-
+  // Get sensor information for each agent
   for (Agent &agent: agents) {
-    agent.move(1.0f, glm::vec2(m_imageWidth - 1, m_imageHeight - 1));
-    trailMap[(int) agent.position.y * m_imageWidth + (int) agent.position.x] += depositionRate;
+    auto sensoryInfo = getSensor(agent.position, agent.direction);
+    agent.sensoryStage(sensoryInfo, 1.0f, rotationAngle);
   }
-  //
-  // diffusion phase
-  // we start from one to avoid edge handling
-  for (int y = 1; y < m_imageHeight - 1; y++) {
-    for (int x = 1; x < m_imageWidth - 1; x++) {
-      float sum = 0;
-      for (int dy = -1; dy <= 1; dy++) {
-        for (int dx = -1; dx <= 1; dx++) {
-          sum += trailMap[(y + dy) * m_imageWidth + (x + dx)];
-        }
-      }
-      trailMap[y * m_imageWidth + x] = sum / 9;
+
+
+  // motor phase
+  for (Agent &agent: agents) {
+    agent.motorPhase(m_imageWidth, m_imageHeight, stepSize);
+    trailMap[agent.position.y][agent.position.x] += depositionRate;
+  }
+
+  diffusion(trailMap, m_imageWidth, m_imageHeight, decayRate);
+
+  // finally convert the trail map to an image
+  for (int y = 0; y < m_imageHeight; y++) {
+    for (int x = 0; x < m_imageWidth; x++) {
+      float value = trailMap[y][x];
+      m_Data[y * m_imageWidth + x] = vec4tobyte(glm::vec4(value, value, value, 1.0f));
     }
   }
-
-  // decay phase
-  for (int i = 0; i < m_imageWidth * m_imageHeight; i++) {
-    trailMap[i] *= 1; // rather aggressive decay
-  }
-
-  // convert trail map to image
-  for (int i = 0; i < m_imageWidth * m_imageHeight; i++) {
-    m_Data[i] = vec4tobyte(glm::vec4(1.0f, 1.0f, 1.0f, std::min(1.f, trailMap[i])));
-  }
 }
-
 
 std::tuple<float, float, float> slime::getSensor(glm::vec2 pos, float direction) {
-  float leftAngle = direction - sensoryAngle;
-  float rightAngle = direction + sensoryAngle;
+  float rightAngle = angleAddition(direction, sensoryAngle);
+  float leftAngle = angleAddition(direction, -sensoryAngle);
+  float frontAngle = direction;
 
-  int leftDY = (int)
-      (sensoryOffsetDistance * sin(glm::radians(leftAngle)));
-  int leftDX = (int) (sensoryOffsetDistance * cos(glm::radians(leftAngle)));
+  glm::vec2 rightSensorPos = pos + glm::vec2(cos(rightAngle), sin(rightAngle));
+  glm::vec2 leftSensorPos = pos + glm::vec2(cos(leftAngle), sin(leftAngle));
+  glm::vec2 frontSensorPos = pos + glm::vec2(cos(frontAngle), sin(frontAngle));
 
-  int rightDY = (int) (sensoryOffsetDistance * sin(glm::radians(rightAngle)));
-  int rightDX = (int) (sensoryOffsetDistance * cos(glm::radians(rightAngle)));
+  posWrap(rightSensorPos, m_imageWidth, m_imageHeight);
+  posWrap(leftSensorPos, m_imageWidth, m_imageHeight);
+  posWrap(frontSensorPos, m_imageWidth, m_imageHeight);
 
-  int centerDY = (int) (sensoryOffsetDistance * sin(glm::radians(direction)));
-  int centerDX = (int) (sensoryOffsetDistance * cos(glm::radians(direction)));
-
-  // TODO: talk about
-  if (pos.x + leftDX < 0 || pos.x + leftDX >= m_imageWidth || pos.y + leftDY < 0 || pos.y + leftDY >= m_imageHeight) {
-    leftDX = 0;
-    leftDY = 0;
-  }
-  if (pos.x + rightDX < 0 || pos.x + rightDX >= m_imageWidth || pos.y + rightDY < 0 || pos.y + rightDY >=
-      m_imageHeight) {
-    rightDX = 0;
-    rightDY = 0;
-  }
-  if (pos.x + centerDX < 0 || pos.x + centerDX >= m_imageWidth || pos.y + centerDY < 0 || pos.y + centerDY >=
-      m_imageHeight) {
-    centerDX = 0;
-    centerDY = 0;
-  }
-
-  float leftSensor = trailMap[(int) (pos.y + leftDY) * m_imageWidth + (int) (pos.x + leftDX)];
-  float rightSensor = trailMap[(int) (pos.y + rightDY) * m_imageWidth + (int) (pos.x + rightDX)];
-  float centerSensor = trailMap[(int) (pos.y + centerDY) * m_imageWidth + (int) (pos.x + centerDX)];
-
-  return std::make_tuple(leftSensor, centerSensor, rightSensor);
-}
+  float rightSensorValue = trailMap[(int) rightSensorPos.y][(int) rightSensorPos.x];
+  float leftSensorValue = trailMap[(int) leftSensorPos.y][(int) leftSensorPos.x];
+  float frontSensorValue = trailMap[(int) frontSensorPos.y][(int) frontSensorPos.x];
 
 
-void Agent::sensoryStage(std::tuple<float, float, float> sensorInfo, float stepSize, float rotationAngle) {
-  // from the trail map, we get the sensor information
-  float leftSensor = std::get<0>(sensorInfo);
-  float centerSensor = std::get<1>(sensorInfo);
-  float rightSensor = std::get<2>(sensorInfo);
-
-  if (centerSensor > leftSensor &&
-      centerSensor > rightSensor) {
-    // we stay on the same path
-    direction += 0.f;
-  } else if (leftSensor < centerSensor && rightSensor < centerSensor) {
-    // we are at a crossroads, where either path is suitable but not the center
-    // we choose a random direction
-    if (rand() % 2 == 0) {
-      direction += rotationAngle;
-    } else {
-      direction -= rotationAngle;
-    }
-  } else if (leftSensor < rightSensor) {
-    // rotate right
-    direction += rotationAngle;
-  } else if (rightSensor < leftSensor) {
-    // rotate left
-    direction -= rotationAngle;
-  } else
-    direction += 0.f;
+  return std::make_tuple(rightSensorValue, leftSensorValue, frontSensorValue);
 }
 
 
