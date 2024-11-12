@@ -11,7 +11,9 @@
 #include "imgui_internal.h"
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/random.hpp>
-
+#include <ctime>
+#include <iostream>
+#include <cstdlib>
 // helpers
 
 uint32_t vec4tobyte(const glm::vec4 &v) {
@@ -178,20 +180,18 @@ private:
 // otherwise adds two functions respecting the [0, 2pi] range
 float angleAddition(float a, float b) {
   float result = a + b;
-  if (result > glm::two_pi<float>()) {
-    result -= glm::two_pi<float>();
-  }
-  if (result < 0) {
-    result += glm::two_pi<float>();
-  }
+  if (result > glm::two_pi<float>())
+      return result - glm::two_pi<float>();
+  else if (result < 0)
+      return result + glm::two_pi<float>();
   return result;
 }
 
 int posWrap(int pos, int max) {
-  if (pos < 0) {
+  if (pos <= 0) {
     return max - 1;
   }
-  if (pos > max) {
+  if (pos >= max) {
     return 0;
   }
   return pos;
@@ -217,9 +217,9 @@ public:
 };
 
 void Agent::sensoryStage(std::tuple<float, float, float> sensoryInfo, float stepSize, float rotationAngle) {
-  float leftSensorValue = std::get<1>(sensoryInfo);
-  float rightSensorValue = std::get<0>(sensoryInfo);
-  float frontSensorValue = std::get<2>(sensoryInfo);
+  float leftSensorValue = std::get<0>(sensoryInfo);
+  float rightSensorValue = std::get<2>(sensoryInfo);
+  float frontSensorValue = std::get<1>(sensoryInfo);
 
   if (frontSensorValue > leftSensorValue && frontSensorValue > rightSensorValue) {
     direction = angleAddition(direction, 0);
@@ -273,19 +273,30 @@ void diffusion(std::vector<std::vector<float> > &array, int width, int height, f
   array = newArray;
 }
 
+struct slimeSettings {
+    float sensoryAngle = glm::radians(22.5f);
+    float rotationAngle = glm::radians(45.0f);
+    float sensoryOffsetDistance = 20.f;
+    float stepSize = 5.f;
+    float depositionRate = 10.f;
+    float decayRate = 0.5f;
+};
 
 class slime : public imageCreatorEntity {
 public:
-  slime(int width, int height): imageCreatorEntity(width, height) {
+  slime(int width, int height, slimeSettings* slimesettings): imageCreatorEntity(width, height) {
     time = 0.0f;
     trailMap = std::vector<std::vector<float> >(height + 1, std::vector<float>(width + 1));
-    agents = std::vector<Agent>(1000);
+    agents = std::vector<Agent>(10000);
+    float angle = 0.f;
+    float angleChange = 0.1;
     for (Agent &agent: agents) {
-      int randPosx = rand() % width;
-      int randPosy = rand() % height;
+      int randPosx = width/2;
+      int randPosy = height/2;
       agent.position = glm::vec2(randPosx, randPosy);
       agent.direction = glm::linearRand(0.0f, glm::two_pi<float>());
     }
+    settings = slimesettings;
   }
 
   void requestImage() override {
@@ -294,15 +305,10 @@ public:
 
   void computeImage() override;
 
-  std::tuple<float, float, float> getSensor(glm::vec2 pos, float direction);
+  std::tuple<float, float, float> getSensor(glm::vec2 pos, float direction, float scale);
 
 
-  float sensoryAngle = glm::radians(45.f);
-  float rotationAngle = glm::radians(45.0f);
-  float sensoryOffsetDistance = 9.0f;
-  float stepSize = 1.f;
-  float depositionRate = 5.f;
-  float decayRate = 0.1f;
+  slimeSettings* settings;
 
 private:
   std::vector<std::vector<float> > trailMap;
@@ -310,42 +316,47 @@ private:
 };
 
 void slime::computeImage() {
-  m_Data = new uint32_t[m_imageWidth * m_imageHeight];
+    // this line causes a data leak, if the previous data is not deleted
+    //m_Data = new uint32_t[m_imageWidth * m_imageHeight];
+
+    delete [] m_Data;
+    m_Data = new uint32_t[m_imageWidth * m_imageHeight];
+
 
   // sensory phase
 
   // Get sensor information for each agent
   for (Agent &agent: agents) {
-    auto sensoryInfo = getSensor(agent.position, agent.direction);
-    agent.sensoryStage(sensoryInfo, 1.0f, rotationAngle);
+    auto sensoryInfo = getSensor(agent.position, agent.direction, settings->sensoryOffsetDistance);
+    agent.sensoryStage(sensoryInfo, 1.0f, settings->rotationAngle);
   }
 
 
   // motor phase
   for (Agent &agent: agents) {
-    agent.motorPhase(m_imageWidth, m_imageHeight, stepSize);
-    trailMap[agent.position.y][agent.position.x] += depositionRate;
+    agent.motorPhase(m_imageWidth, m_imageHeight, settings->stepSize);
+    trailMap[agent.position.y][agent.position.x] += settings->depositionRate;
   }
 
-  diffusion(trailMap, m_imageWidth, m_imageHeight, decayRate);
+  diffusion(trailMap, m_imageWidth, m_imageHeight, settings->decayRate);
 
   // finally convert the trail map to an image
   for (int y = 0; y < m_imageHeight; y++) {
     for (int x = 0; x < m_imageWidth; x++) {
       float value = trailMap[y][x];
-      m_Data[y * m_imageWidth + x] = vec4tobyte(glm::vec4(value, value, value, 1.0f));
+      m_Data[y * m_imageWidth + x] = vec4tobyte(glm::vec4(1.f, 1.f, 1.f, value));
     }
   }
 }
 
-std::tuple<float, float, float> slime::getSensor(glm::vec2 pos, float direction) {
-  float rightAngle = angleAddition(direction, sensoryAngle);
-  float leftAngle = angleAddition(direction, -sensoryAngle);
+std::tuple<float, float, float> slime::getSensor(glm::vec2 pos, float direction, float scale) {
+  float rightAngle = angleAddition(direction, settings->sensoryAngle);
+  float leftAngle = angleAddition(direction, -settings->sensoryAngle);
   float frontAngle = direction;
 
-  glm::vec2 rightSensorPos = pos + glm::vec2(cos(rightAngle), sin(rightAngle));
-  glm::vec2 leftSensorPos = pos + glm::vec2(cos(leftAngle), sin(leftAngle));
-  glm::vec2 frontSensorPos = pos + glm::vec2(cos(frontAngle), sin(frontAngle));
+  glm::vec2 rightSensorPos = pos + (scale * glm::vec2(cos(rightAngle), sin(rightAngle)));
+  glm::vec2 leftSensorPos = pos + (scale * glm::vec2(cos(leftAngle), sin(leftAngle)));
+  glm::vec2 frontSensorPos = pos + (scale * glm::vec2(cos(frontAngle), sin(frontAngle)));
 
   posWrap(rightSensorPos, m_imageWidth, m_imageHeight);
   posWrap(leftSensorPos, m_imageWidth, m_imageHeight);
@@ -356,14 +367,17 @@ std::tuple<float, float, float> slime::getSensor(glm::vec2 pos, float direction)
   float frontSensorValue = trailMap[(int) frontSensorPos.y][(int) frontSensorPos.x];
 
 
-  return std::make_tuple(rightSensorValue, leftSensorValue, frontSensorValue);
+  return std::make_tuple(leftSensorValue, frontSensorValue, rightSensorValue);
 }
+
+
 
 
 class WindowLayer : public Cashew::Layer {
 public:
   WindowLayer() : Layer() {
-    m_basic = new slime(1040, 720);
+    settings = new slimeSettings();
+    m_basic = new slime(1040, 720, settings);
     m_Image = std::make_shared<Cashew::Image>(1040, 720, Cashew::ImageFormat::RGBA);
   }
 
@@ -382,8 +396,15 @@ public:
       if (ImGui::Button("Hide")) {
         m_shouldPanelSeen = false;
       }
+        ImGui::SliderFloat("Sensory Angle", &settings->sensoryAngle, 0.0f, glm::two_pi<float>());
+        ImGui::SliderFloat("Rotation Angle", &settings->rotationAngle, 0.0f, glm::two_pi<float>());
+        ImGui::SliderFloat("Sensory Offset Distance", &settings->sensoryOffsetDistance, 0.0f, 100.0f);
+        ImGui::SliderFloat("Step Size", &settings->stepSize, 0.0f, 100.0f);
+        ImGui::SliderFloat("Deposition Rate", &settings->depositionRate, 0.0f, 100.0f);
+        ImGui::SliderFloat("Decay Rate", &settings->decayRate, 0.0f, 1.0f);
       ImGui::End();
     }
+
   }
 
   virtual void onUpdate(float dt) override {
@@ -407,11 +428,13 @@ private:
   std::shared_ptr<Cashew::Image> m_Image;
   uint32_t *m_Data = nullptr;
   imageCreatorEntity *m_basic;
+  slimeSettings* settings;
 
   bool m_shouldPanelSeen = true;
 };
 
 Cashew::Application *Cashew::CreateApplication(int argc, char **argv) {
+    srand(time(NULL));
   Cashew::ApplicationSpecification spec;
   spec.Name = "Physarum";
   spec.Width = 1040;
