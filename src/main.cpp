@@ -14,6 +14,7 @@
 #include <ctime>
 #include <iostream>
 #include <cstdlib>
+#include <omp.h>
 // helpers
 
 uint32_t vec4tobyte(const glm::vec4 &v) {
@@ -325,6 +326,7 @@ void slime::computeImage() {
 
   // sensory phase
 
+/*
   // Get sensor information for each agent
   for (Agent &agent: agents) {
     auto sensoryInfo = getSensor(agent.position, agent.direction, settings->sensoryOffsetDistance);
@@ -337,8 +339,19 @@ void slime::computeImage() {
     agent.motorPhase(m_imageWidth, m_imageHeight, settings->stepSize);
     trailMap[agent.position.y][agent.position.x] += settings->depositionRate;
   }
+*/
+#pragma omp parallel for
+for (Agent &agent: agents)
+{
+    auto sensoryInfo = getSensor(agent.position, agent.direction, settings->sensoryOffsetDistance);
+    agent.sensoryStage(sensoryInfo, 1.0f, settings->rotationAngle);
+    agent.motorPhase(m_imageWidth, m_imageHeight, settings->stepSize);
+    trailMap[agent.position.y][agent.position.x] += settings->depositionRate;
+}
+
 
   diffusion(trailMap, m_imageWidth, m_imageHeight, settings->decayRate);
+
 
   // finally convert the trail map to an image
   for (int y = 0; y < m_imageHeight; y++) {
@@ -377,7 +390,7 @@ class WindowLayer : public Cashew::Layer {
 public:
   WindowLayer() : Layer() {
     settings = new slimeSettings();
-    m_basic = new slime(1040, 720, settings);
+    m_basic = new donut(1040,720);
     m_Image = std::make_shared<Cashew::Image>(1040, 720, Cashew::ImageFormat::RGBA);
   }
 
@@ -392,16 +405,16 @@ public:
     // panel
     if (m_shouldPanelSeen) {
       ImGui::Begin("Panel");
-      ImGui::SetWindowSize(ImVec2(320, 720));
+      ImGui::SetWindowSize(ImVec2(350, 720));
       if (ImGui::Button("Hide")) {
         m_shouldPanelSeen = false;
       }
-        ImGui::SliderFloat("Sensory Angle", &settings->sensoryAngle, 0.0f, glm::two_pi<float>());
-        ImGui::SliderFloat("Rotation Angle", &settings->rotationAngle, 0.0f, glm::two_pi<float>());
-        ImGui::SliderFloat("Sensory Offset Distance", &settings->sensoryOffsetDistance, 0.0f, 100.0f);
-        ImGui::SliderFloat("Step Size", &settings->stepSize, 0.0f, 100.0f);
-        ImGui::SliderFloat("Deposition Rate", &settings->depositionRate, 0.0f, 100.0f);
-        ImGui::SliderFloat("Decay Rate", &settings->decayRate, 0.0f, 1.0f);
+        ImGui::SliderFloat("Sensory Angle", &settings->sensoryAngle, 0.0f, glm::two_pi<float>(), "%.2f radians");
+        ImGui::SliderFloat("Rotation Angle", &settings->rotationAngle, 0.0f, glm::two_pi<float>(), "%.2f radians");
+        ImGui::SliderFloat("Sensory Offset Distance", &settings->sensoryOffsetDistance, 0.0f, 100.0f, "%.2f units");
+        ImGui::SliderFloat("Step Size", &settings->stepSize, 0.0f, 100.0f, "%.2f units");
+        ImGui::SliderFloat("Deposition Rate", &settings->depositionRate, 0.0f, 100.0f, "%.2f");
+        ImGui::SliderFloat("Decay Rate", &settings->decayRate, 0.0f, 1.0f, "%.2f");
       ImGui::End();
     }
 

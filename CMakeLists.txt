@@ -19,6 +19,8 @@ if (WIN32)
     include_directories($ENV{VULKAN_SDK}/Include)
 endif (WIN32)
 
+find_package(OpenMP REQUIRED)
+
 add_executable(${PROJECT_NAME} src/main.cpp
 )
 target_include_directories(${PROJECT_NAME} PUBLIC vendors/Cashew/CashewLib/src/)
